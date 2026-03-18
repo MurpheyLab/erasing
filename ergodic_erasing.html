@@ -110,6 +110,52 @@
             white-space: pre-line;
         }
 
+        .legend {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #000;
+            font-size: 16px;
+            line-height: 1.35;
+            pointer-events: none;
+            min-width: 104px;
+        }
+
+        .legend-title {
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-item+.legend-item {
+            margin-top: 4px;
+        }
+
+        .legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 999px;
+            border: 2px solid #000;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+        }
+
+        .legend-swatch.robot {
+            background: #1f77b4;
+        }
+
+        .legend-swatch.human {
+            background: #ff7f0e;
+        }
+
         .status {
             font-size: 14px;
             min-height: 20px;
@@ -152,11 +198,24 @@
         <div class="stage" id="env-container" aria-label="Ergodic erasing environment">
             <canvas id="envCanvas"></canvas>
             <div class="overlay" id="statsOverlay">Loading target samples...</div>
+            <div class="legend" aria-hidden="true">
+                <!-- <div class="legend-title">Legend</div> -->
+                <div class="legend-item">
+                    <span class="legend-swatch robot"></span>
+                    <span>Robot</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-swatch human"></span>
+                    <span>You</span>
+                </div>
+            </div>
         </div>
 
         <div class="hint">
-            The black points represent the target to be erased (you can choose different target from the dropdown menu). The blue eraser is
-            controlled by a robot. The orange eraser follows your mouse or finger on the screen. Click the "Reset" button to restart.
+            The black points represent the target to be erased (you can choose different target from the dropdown menu).
+            The blue eraser is
+            controlled by a robot. The orange eraser follows your mouse or finger on the screen. Click the "Reset"
+            button to restart.
         </div>
     </div>
 
@@ -186,8 +245,8 @@
         const HUMAN_START = { x: 0.94, y: 0.94 };
 
         const controller = {
-            numK: 14,
-            speedNorm: 0.25,
+            numK: 20,
+            speedNorm: 0.5,
             wallGain: 0.045,
             lambdaPow: 1.5,
             autoTrajectoryTime: 0.0,
@@ -496,17 +555,11 @@
             }
 
             const total = targetPoints.length;
-            const remaining = total - erasedCount;
             const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
 
             statsOverlay.textContent =
                 `Target: ${currentTargetName}\n` +
-                // `Target points: ${total}\n` +
-                // `Remaining: ${remaining}\n` +
                 `Erased: ${percent}%`;
-                // `Mode: ${erasingActive ? "erasing" : "paused"}\n` +
-                // `Human history time: ${controller.humanTrajectoryTime.toFixed(2)}\n` +
-                // `Shared history time: ${(controller.autoTrajectoryTime + controller.humanTrajectoryTime).toFixed(2)}`;
         }
 
         function updateUiText() {
