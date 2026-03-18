@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ergodic Erasing Demo</title>
+    <style>
+        :root {
+            --max-demo: 920px;
+            --border: 3px solid #000;
+        }
+
+        body {
+            margin: 0;
+            padding: 16px;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+            background: #fff;
+            color: #111;
+        }
+
+        .demo-shell {
+            width: min(100%, var(--max-demo));
+            margin: 0 auto;
+        }
+
+        h2 {
+            margin: 0 0 6px;
+            font-size: 28px;
+        }
+
+        h3 {
+            margin: 0 0 12px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .stage {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border: var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .overlay {
+            position: absolute;
+            left: 12px;
+            top: 12px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #000;
+            font-size: 13px;
+            line-height: 1.3;
+            pointer-events: none;
+            white-space: pre-line;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            align-items: center;
+        }
+
+        button {
+            appearance: none;
+            border: 2px solid #000;
+            background: #fff;
+            padding: 8px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        #toggleErasingButton {
+            color: red;
+            border-color: red;
+        }
+
+        .hint {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #333;
+            line-height: 1.45;
+            text-align: justify;
+        }
+
+        .status {
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="demo-shell">
+        <h2>Ergodic Erasing Demo</h2>
+        <h3>Robot coverage of a sampled target distribution with visible erasing.</h3>
+
+        <div class="stage" id="env-container" aria-label="Ergodic erasing environment">
+            <canvas id="envCanvas"></canvas>
+            <div class="overlay" id="statsOverlay">Loading target samples...</div>
+        </div>
+
+        <div class="button-row">
+            <button id="toggleErasingButton" disabled>Start Erasing</button>
+            <span class="status" id="statusText">Loading target samples...</span>
+        </div>
+
+        <div class="hint">
+            The black points are samples from the target distribution. The blue robot starts from the lower-left corner
+            and follows an ergodic controller built from fixed Fourier coefficients computed from those samples. Any
+            target points inside the robot's erasing footprint vanish permanently.
+        </div>
+    </div>
+
+    <script>
+        const TARGET_URL = "https://raw.githubusercontent.com/MurpheyLab/lqr-flow-matching/refs/heads/main/tutorials/test_objects/2d/airplane.txt";
+
+        const envSize = 680;
+        const robotRadiusPx = 10;
+        const eraseRadiusPx = 16;
+        const pointRadiusPx = 2.5;
+        const trailMaxLength = 450;
+
+        const controller = {
+            numK: 14,
+            speedNorm: 0.18,
+            wallGain: 0.045,
+            lambdaPow: 1.5,
+            trajectoryTime: 0.0,
+            cksIntegral: null,
+            phiks: null,
+            ksX: null,
+            ksY: null,
+            hks: null,
+            lamks: null
+        };
+
+        const envCanvas = document.getElementById("envCanvas");
+        const envCtx = envCanvas.getContext("2d");
+        const container = document.getElementById("env-container");
+        const toggleErasingButton = document.getElementById("toggleErasingButton");
+        const statusText = document.getElementById("statusText");
+        const statsOverlay = document.getElementById("statsOverlay");
+
+        let dpr = window.devicePixelRatio || 1;
+        let cssSize = envSize;
+
+        let animationReady = false;
+        let erasingActive = false;
+        let lastTimestamp = null;
+
+        let robot = {
+            x: 0.06,
+            y: 0.06,
+            vx: 0.0,
+            vy: 0.0
+        };
+
+        let trail = [];
+        let targetPoints = [];
+        let erasedCount = 0;
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function resizeCanvas() {
+            cssSize = Math.max(220, Math.floor(container.clientWidth));
+            dpr = window.devicePixelRatio || 1;
+
+            envCanvas.style.width = cssSize + "px";
+            envCanvas.style.height = cssSize + "px";
+            envCanvas.width = Math.floor(cssSize * dpr);
+            envCanvas.height = Math.floor(cssSize * dpr);
+
+            envCtx.setTransform(envCanvas.width / envSize, 0, 0, envCanvas.height / envSize, 0, 0);
+            draw();
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+
+        function analyticHk(kx, ky) {
+            const ix = (kx === 0) ? 1.0 : 0.5;
+            const iy = (ky === 0) ? 1.0 : 0.5;
+            return Math.sqrt(ix * iy);
+        }
+
+        function initController() {
+            const numModes = controller.numK * controller.numK;
+            controller.cksIntegral = new Float64Array(numModes);
+            controller.phiks = new Float64Array(numModes);
+            controller.ksX = new Int32Array(numModes);
+            controller.ksY = new Int32Array(numModes);
+            controller.hks = new Float64Array(numModes);
+            controller.lamks = new Float64Array(numModes);
+
+            let idx = 0;
+            for (let ky = 0; ky < controller.numK; ky++) {
+                for (let kx = 0; kx < controller.numK; kx++) {
+                    controller.ksX[idx] = kx;
+                    controller.ksY[idx] = ky;
+                    controller.hks[idx] = analyticHk(kx, ky);
+                    controller.lamks[idx] = Math.pow(1 + Math.hypot(kx, ky), -controller.lambdaPow);
+                    idx += 1;
+                }
+            }
+        }
+
+        function basisValueAtPoint(x, y, modeIndex) {
+            const kx = controller.ksX[modeIndex];
+            const ky = controller.ksY[modeIndex];
+            const hk = controller.hks[modeIndex];
+            return Math.cos(Math.PI * kx * x) * Math.cos(Math.PI * ky * y) / hk;
+        }
+
+        function basisGradientAtPoint(x, y, modeIndex) {
+            const kx = controller.ksX[modeIndex];
+            const ky = controller.ksY[modeIndex];
+            const hk = controller.hks[modeIndex];
+            const common = 1.0 / hk;
+
+            const dfdx = -Math.PI * kx * Math.sin(Math.PI * kx * x) * Math.cos(Math.PI * ky * y) * common;
+            const dfdy = -Math.PI * ky * Math.cos(Math.PI * kx * x) * Math.sin(Math.PI * ky * y) * common;
+            return [dfdx, dfdy];
+        }
+
+        function computeTargetCoefficientsFromSamples(points) {
+            controller.phiks.fill(0.0);
+            if (!points.length) return;
+
+            const invN = 1.0 / points.length;
+            for (let m = 0; m < controller.phiks.length; m++) {
+                let sum = 0.0;
+                for (const p of points) {
+                    sum += basisValueAtPoint(p.x, p.y, m);
+                }
+                controller.phiks[m] = sum * invN;
+            }
+        }
+
+        function resetTrajectoryStatistics() {
+            controller.trajectoryTime = 0.0;
+            controller.cksIntegral.fill(0.0);
+        }
+
+        function currentCk(modeIndex) {
+            if (controller.trajectoryTime <= 1e-8) return 0.0;
+            return controller.cksIntegral[modeIndex] / controller.trajectoryTime;
+        }
+
+        function accumulateTrajectoryStats(x, y, dt) {
+            for (let m = 0; m < controller.cksIntegral.length; m++) {
+                controller.cksIntegral[m] += dt * basisValueAtPoint(x, y, m);
+            }
+            controller.trajectoryTime += dt;
+        }
+
+        function wallRepulsion(x, y) {
+            const eps = 0.055;
+            let rx = 0.0;
+            let ry = 0.0;
+
+            if (x < eps) rx += (eps - x) / eps;
+            if (x > 1 - eps) rx -= (x - (1 - eps)) / eps;
+            if (y < eps) ry += (eps - y) / eps;
+            if (y > 1 - eps) ry -= (y - (1 - eps)) / eps;
+
+            return [controller.wallGain * rx, controller.wallGain * ry];
+        }
+
+        function planVelocity(x, y) {
+            let gx = 0.0;
+            let gy = 0.0;
+
+            for (let m = 0; m < controller.phiks.length; m++) {
+                const mismatch = controller.lamks[m] * (currentCk(m) - controller.phiks[m]);
+                const grad = basisGradientAtPoint(x, y, m);
+                gx += mismatch * grad[0];
+                gy += mismatch * grad[1];
+            }
+
+            gx = -gx;
+            gy = -gy;
+
+            const wall = wallRepulsion(x, y);
+            gx += wall[0];
+            gy += wall[1];
+
+            const norm = Math.hypot(gx, gy);
+            if (norm < 1e-10) {
+                return [0.0, 0.0];
+            }
+
+            return [controller.speedNorm * gx / norm, controller.speedNorm * gy / norm];
+        }
+
+        function erasePointsUnderRobot() {
+            const rr = (eraseRadiusPx / envSize) * (eraseRadiusPx / envSize);
+            for (const p of targetPoints) {
+                if (p.erased) continue;
+                const dx = p.x - robot.x;
+                const dy = p.y - robot.y;
+                if (dx * dx + dy * dy <= rr) {
+                    p.erased = true;
+                    erasedCount += 1;
+                }
+            }
+        }
+
+        function updateStatsText() {
+            const total = targetPoints.length;
+            const remaining = total - erasedCount;
+            const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
+
+            statusText.textContent = animationReady
+                ? `${remaining} / ${total} target points remaining`
+                : "Loading target samples...";
+
+            statsOverlay.textContent = animationReady
+                ? `Target points: ${total}\nRemaining: ${remaining}\nErased: ${erasedCount} (${percent}%)\nMode: ${erasingActive ? "erasing" : "paused"}`
+                : "Loading target samples...";
+        }
+
+        function setButtonState() {
+            toggleErasingButton.textContent = erasingActive ? "Stop Erasing" : "Start Erasing";
+            if (erasingActive) {
+                toggleErasingButton.style.color = "";
+                toggleErasingButton.style.borderColor = "";
+            } else {
+                toggleErasingButton.style.color = "red";
+                toggleErasingButton.style.borderColor = "red";
+            }
+        }
+
+        function drawTargetPoints() {
+            envCtx.fillStyle = "#111";
+            for (const p of targetPoints) {
+                if (p.erased) continue;
+                envCtx.beginPath();
+                envCtx.arc(p.x * envSize, p.y * envSize, pointRadiusPx, 0, 2 * Math.PI);
+                envCtx.fill();
+            }
+        }
+
+        function drawTrail() {
+            if (trail.length < 2) return;
+            envCtx.beginPath();
+            envCtx.lineWidth = 2;
+            envCtx.strokeStyle = "rgba(31, 119, 180, 0.35)";
+            envCtx.moveTo(trail[0].x * envSize, trail[0].y * envSize);
+            for (let i = 1; i < trail.length; i++) {
+                envCtx.lineTo(trail[i].x * envSize, trail[i].y * envSize);
+            }
+            envCtx.stroke();
+        }
+
+        function drawRobot() {
+            const x = robot.x * envSize;
+            const y = robot.y * envSize;
+
+            envCtx.beginPath();
+            envCtx.arc(x, y, eraseRadiusPx, 0, 2 * Math.PI);
+            envCtx.fillStyle = "rgba(31, 119, 180, 0.12)";
+            envCtx.fill();
+            envCtx.lineWidth = 1.5;
+            envCtx.strokeStyle = "rgba(31, 119, 180, 0.4)";
+            envCtx.stroke();
+
+            envCtx.beginPath();
+            envCtx.arc(x, y, robotRadiusPx, 0, 2 * Math.PI);
+            envCtx.fillStyle = "#1f77b4";
+            envCtx.fill();
+            envCtx.lineWidth = 2;
+            envCtx.strokeStyle = "#000";
+            envCtx.stroke();
+        }
+
+        function drawCornerMarker() {
+            envCtx.save();
+            envCtx.strokeStyle = "#999";
+            envCtx.lineWidth = 1.5;
+            envCtx.setLineDash([6, 6]);
+            envCtx.strokeRect(0, 0, 48, 48);
+            envCtx.restore();
+        }
+
+        function draw() {
+            envCtx.clearRect(0, 0, envSize, envSize);
+            envCtx.fillStyle = "#fff";
+            envCtx.fillRect(0, 0, envSize, envSize);
+
+            drawCornerMarker();
+            drawTargetPoints();
+            drawTrail();
+            drawRobot();
+        }
+
+        function stepSimulation(dt) {
+            const safeDt = Math.min(dt, 0.04);
+            const velocity = planVelocity(robot.x, robot.y);
+            robot.vx = velocity[0];
+            robot.vy = velocity[1];
+
+            robot.x = clamp(robot.x + safeDt * robot.vx, 0.0, 1.0);
+            robot.y = clamp(robot.y + safeDt * robot.vy, 0.0, 1.0);
+
+            accumulateTrajectoryStats(robot.x, robot.y, safeDt);
+            erasePointsUnderRobot();
+
+            trail.push({ x: robot.x, y: robot.y });
+            if (trail.length > trailMaxLength) {
+                trail.shift();
+            }
+        }
+
+        function animate(timestamp) {
+            if (lastTimestamp === null) lastTimestamp = timestamp;
+            const dt = (timestamp - lastTimestamp) / 1000.0;
+            lastTimestamp = timestamp;
+
+            if (animationReady && erasingActive) {
+                stepSimulation(dt);
+                updateStatsText();
+            }
+
+            draw();
+            requestAnimationFrame(animate);
+        }
+
+        async function loadTargetSamples() {
+            const response = await fetch(TARGET_URL, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error(`Could not fetch target file: ${response.status}`);
+            }
+
+            const text = await response.text();
+            const lines = text.split(/\r?\n/);
+            const points = [];
+
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line) continue;
+                const pieces = line.split(/\s+/).map(Number);
+                if (pieces.length < 2) continue;
+                const x = pieces[0];
+                const y = pieces[1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                points.push({ x: clamp(x, 0.0, 1.0), y: clamp(y, 0.0, 1.0), erased: false });
+            }
+
+            if (!points.length) {
+                throw new Error("The target file did not contain any valid sample points.");
+            }
+
+            targetPoints = points;
+            erasedCount = 0;
+            computeTargetCoefficientsFromSamples(targetPoints);
+            resetTrajectoryStatistics();
+            erasePointsUnderRobot();
+
+            trail = [{ x: robot.x, y: robot.y }];
+            animationReady = true;
+            toggleErasingButton.disabled = false;
+            updateStatsText();
+            draw();
+        }
+
+        toggleErasingButton.addEventListener("click", () => {
+            if (!animationReady) return;
+            erasingActive = !erasingActive;
+            setButtonState();
+            updateStatsText();
+        });
+
+        initController();
+        resizeCanvas();
+        setButtonState();
+        updateStatsText();
+        requestAnimationFrame(animate);
+
+        loadTargetSamples().catch((error) => {
+            console.error(error);
+            statusText.textContent = error.message;
+            statsOverlay.textContent = error.message;
+            draw();
+        });
+    </script>
+</body>
+
+</html>
