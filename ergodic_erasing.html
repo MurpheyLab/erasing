@@ -4,10 +4,10 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ergodic Erasing Demo</title>
+    <title>Ergodic Erasing</title>
     <style>
         :root {
-            --max-demo: 920px;
+            --max-demo: 980px;
             --border: 3px solid #000;
         }
 
@@ -35,6 +35,50 @@
             font-size: 14px;
         }
 
+        .control-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .control-row label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        select,
+        button {
+            appearance: none;
+            border: 2px solid #000;
+            background: #fff;
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 16px;
+        }
+
+        button {
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        button:disabled,
+        select:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        #toggleErasingButton {
+            color: red;
+            border-color: red;
+        }
+
         .stage {
             position: relative;
             width: 100%;
@@ -43,6 +87,7 @@
             border-radius: 12px;
             overflow: hidden;
             background: #fff;
+            touch-action: none;
         }
 
         canvas {
@@ -65,37 +110,9 @@
             white-space: pre-line;
         }
 
-        .button-row {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-top: 12px;
-            align-items: center;
-        }
-
-        button {
-            appearance: none;
-            border: 2px solid #000;
-            background: #fff;
-            padding: 8px 14px;
-            border-radius: 10px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 18px;
-        }
-
-        button:disabled {
-            opacity: 0.55;
-            cursor: default;
-        }
-
-        button:active:not(:disabled) {
-            transform: translateY(1px);
-        }
-
-        #toggleErasingButton {
-            color: red;
-            border-color: red;
+        .status {
+            font-size: 14px;
+            min-height: 20px;
         }
 
         .hint {
@@ -105,51 +122,78 @@
             line-height: 1.45;
             text-align: justify;
         }
-
-        .status {
-            font-size: 14px;
-        }
     </style>
 </head>
 
 <body>
     <div class="demo-shell">
-        <h2>Ergodic Erasing Demo</h2>
-        <h3>Robot coverage of a sampled target distribution with visible erasing.</h3>
+        <h2>Ergodic Erasing</h2>
+        <h3>Human-robot co-adaptation demonstrated through erasing.</h3>
+
+        <div class="control-row">
+            <label for="targetSelect">Target object<br>(click to select)</label>
+            <select id="targetSelect">
+                <option value="airplane">airplane</option>
+                <option value="eifeltower">eifeltower</option>
+                <option value="fire">fire</option>
+                <option value="heart">heart</option>
+                <option value="lock">lock</option>
+                <option value="scissors">scissors</option>
+                <option value="star">star</option>
+                <option value="sword">sword</option>
+                <option value="thunder">thunder</option>
+                <option value="trophy">trophy</option>
+            </select>
+            <button id="toggleErasingButton" disabled>Start Robot</button>
+            <button id="resetButton" disabled>Reset</button>
+            <span class="status" id="statusText">Loading target samples...</span>
+        </div>
 
         <div class="stage" id="env-container" aria-label="Ergodic erasing environment">
             <canvas id="envCanvas"></canvas>
             <div class="overlay" id="statsOverlay">Loading target samples...</div>
         </div>
 
-        <div class="button-row">
-            <button id="toggleErasingButton" disabled>Start Erasing</button>
-            <span class="status" id="statusText">Loading target samples...</span>
-        </div>
-
         <div class="hint">
-            The black points are samples from the target distribution. The blue robot starts from the lower-left corner
-            and follows an ergodic controller built from fixed Fourier coefficients computed from those samples. Any
-            target points inside the robot's erasing footprint vanish permanently.
+            The black points represent the target to be erased (you can choose different target from the dropdown menu). The blue eraser is
+            controlled by a robot. The orange eraser follows your mouse or finger on the screen. Click the "Reset" button to restart.
         </div>
     </div>
 
     <script>
-        const TARGET_URL = "https://raw.githubusercontent.com/MurpheyLab/lqr-flow-matching/refs/heads/main/tutorials/test_objects/2d/airplane.txt";
+        const TARGET_BASE_URL = "https://raw.githubusercontent.com/MurpheyLab/lqr-flow-matching/refs/heads/main/tutorials/test_objects/2d/";
+        const TARGET_NAMES = [
+            "airplane",
+            "eifeltower",
+            "fire",
+            "heart",
+            "lock",
+            "scissors",
+            "star",
+            "sword",
+            "thunder",
+            "trophy"
+        ];
 
         const envSize = 680;
         const robotRadiusPx = 10;
         const eraseRadiusPx = 36;
         const pointRadiusPx = 2.5;
-        const trailMaxLength = 450;
+        const trailMaxLength = 500;
+        const humanTrackingSpeed = 0.1;
+
+        const AUTO_START = { x: 0.06, y: 0.06 };
+        const HUMAN_START = { x: 0.94, y: 0.94 };
 
         const controller = {
             numK: 14,
-            speedNorm: 0.18,
+            speedNorm: 0.25,
             wallGain: 0.045,
             lambdaPow: 1.5,
-            trajectoryTime: 0.0,
-            cksIntegral: null,
+            autoTrajectoryTime: 0.0,
+            humanTrajectoryTime: 0.0,
+            autoCksIntegral: null,
+            humanCksIntegral: null,
             phiks: null,
             ksX: null,
             ksY: null,
@@ -160,25 +204,40 @@
         const envCanvas = document.getElementById("envCanvas");
         const envCtx = envCanvas.getContext("2d");
         const container = document.getElementById("env-container");
+        const targetSelect = document.getElementById("targetSelect");
         const toggleErasingButton = document.getElementById("toggleErasingButton");
+        const resetButton = document.getElementById("resetButton");
         const statusText = document.getElementById("statusText");
         const statsOverlay = document.getElementById("statsOverlay");
 
         let dpr = window.devicePixelRatio || 1;
         let cssSize = envSize;
+        let cssScale = 1;
 
         let animationReady = false;
         let erasingActive = false;
+        let isLoading = false;
         let lastTimestamp = null;
+        let currentTargetName = targetSelect.value;
+        let loadRequestId = 0;
 
-        let robot = {
-            x: 0.06,
-            y: 0.06,
+        let autoRobot = {
+            x: AUTO_START.x,
+            y: AUTO_START.y,
             vx: 0.0,
             vy: 0.0
         };
 
-        let trail = [];
+        let humanRobot = {
+            x: HUMAN_START.x,
+            y: HUMAN_START.y,
+            targetX: HUMAN_START.x,
+            targetY: HUMAN_START.y
+        };
+
+        let autoTrail = [];
+        let humanTrail = [];
+        let loadedTargetSamples = [];
         let targetPoints = [];
         let erasedCount = 0;
 
@@ -194,21 +253,6 @@
             return (1 - y) * envSize;
         }
 
-        function resizeCanvas() {
-            cssSize = Math.max(220, Math.floor(container.clientWidth));
-            dpr = window.devicePixelRatio || 1;
-
-            envCanvas.style.width = cssSize + "px";
-            envCanvas.style.height = cssSize + "px";
-            envCanvas.width = Math.floor(cssSize * dpr);
-            envCanvas.height = Math.floor(cssSize * dpr);
-
-            envCtx.setTransform(envCanvas.width / envSize, 0, 0, envCanvas.height / envSize, 0, 0);
-            draw();
-        }
-
-        window.addEventListener("resize", resizeCanvas);
-
         function analyticHk(kx, ky) {
             const ix = (kx === 0) ? 1.0 : 0.5;
             const iy = (ky === 0) ? 1.0 : 0.5;
@@ -217,7 +261,8 @@
 
         function initController() {
             const numModes = controller.numK * controller.numK;
-            controller.cksIntegral = new Float64Array(numModes);
+            controller.autoCksIntegral = new Float64Array(numModes);
+            controller.humanCksIntegral = new Float64Array(numModes);
             controller.phiks = new Float64Array(numModes);
             controller.ksX = new Int32Array(numModes);
             controller.ksY = new Int32Array(numModes);
@@ -269,20 +314,39 @@
         }
 
         function resetTrajectoryStatistics() {
-            controller.trajectoryTime = 0.0;
-            controller.cksIntegral.fill(0.0);
+            controller.autoTrajectoryTime = 0.0;
+            controller.humanTrajectoryTime = 0.0;
+            controller.autoCksIntegral.fill(0.0);
+            controller.humanCksIntegral.fill(0.0);
         }
 
-        function currentCk(modeIndex) {
-            if (controller.trajectoryTime <= 1e-8) return 0.0;
-            return controller.cksIntegral[modeIndex] / controller.trajectoryTime;
-        }
-
-        function accumulateTrajectoryStats(x, y, dt) {
-            for (let m = 0; m < controller.cksIntegral.length; m++) {
-                controller.cksIntegral[m] += dt * basisValueAtPoint(x, y, m);
+        function accumulateStats(integralArray, x, y, dt) {
+            for (let m = 0; m < integralArray.length; m++) {
+                integralArray[m] += dt * basisValueAtPoint(x, y, m);
             }
-            controller.trajectoryTime += dt;
+        }
+
+        function accumulateAutoTrajectoryStats(x, y, dt) {
+            accumulateStats(controller.autoCksIntegral, x, y, dt);
+            controller.autoTrajectoryTime += dt;
+        }
+
+        function accumulateHumanTrajectoryStats(x, y, dt) {
+            accumulateStats(controller.humanCksIntegral, x, y, dt);
+            controller.humanTrajectoryTime += dt;
+        }
+
+        function currentCombinedCk(modeIndex) {
+            let numerator = controller.autoCksIntegral[modeIndex];
+            let denominator = controller.autoTrajectoryTime;
+
+            if (controller.humanTrajectoryTime > 0.0) {
+                numerator += controller.humanCksIntegral[modeIndex];
+                denominator += controller.humanTrajectoryTime;
+            }
+
+            if (denominator <= 1e-8) return 0.0;
+            return numerator / denominator;
         }
 
         function wallRepulsion(x, y) {
@@ -298,12 +362,15 @@
             return [controller.wallGain * rx, controller.wallGain * ry];
         }
 
-        function planVelocity(x, y) {
+        function planAutoVelocity(x, y) {
+            const remaining = targetPoints.length - erasedCount;
+            if (remaining <= 0) return [0.0, 0.0];
+
             let gx = 0.0;
             let gy = 0.0;
 
             for (let m = 0; m < controller.phiks.length; m++) {
-                const mismatch = controller.lamks[m] * (currentCk(m) - controller.phiks[m]);
+                const mismatch = controller.lamks[m] * (currentCombinedCk(m) - controller.phiks[m]);
                 const grad = basisGradientAtPoint(x, y, m);
                 gx += mismatch * grad[0];
                 gy += mismatch * grad[1];
@@ -317,19 +384,18 @@
             gy += wall[1];
 
             const norm = Math.hypot(gx, gy);
-            if (norm < 1e-10) {
-                return [0.0, 0.0];
-            }
+            if (norm < 1e-10) return [0.0, 0.0];
 
             return [controller.speedNorm * gx / norm, controller.speedNorm * gy / norm];
         }
 
-        function erasePointsUnderRobot() {
-            const rr = (eraseRadiusPx / envSize) * (eraseRadiusPx / envSize);
+        function erasePointsAt(x, y) {
+            const rr = Math.pow(eraseRadiusPx / envSize, 2);
+
             for (const p of targetPoints) {
                 if (p.erased) continue;
-                const dx = p.x - robot.x;
-                const dy = p.y - robot.y;
+                const dx = p.x - x;
+                const dy = p.y - y;
                 if (dx * dx + dy * dy <= rr) {
                     p.erased = true;
                     erasedCount += 1;
@@ -337,22 +403,119 @@
             }
         }
 
-        function updateStatsText() {
+        function erasePointsUnderBothRobots() {
+            erasePointsAt(autoRobot.x, autoRobot.y);
+            erasePointsAt(humanRobot.x, humanRobot.y);
+        }
+
+        function pushTrail(trail, x, y) {
+            trail.push({ x, y });
+            if (trail.length > trailMaxLength) trail.shift();
+        }
+
+        function setTargetFromClientXY(clientX, clientY) {
+            const bounds = container.getBoundingClientRect();
+            const xCss = clientX - bounds.left;
+            const yCss = clientY - bounds.top;
+
+            const xClamped = clamp(xCss, 0, cssSize);
+            const yClamped = clamp(yCss, 0, cssSize);
+
+            humanRobot.targetX = xClamped * cssScale / envSize;
+            humanRobot.targetY = 1.0 - (yClamped * cssScale / envSize);
+            humanRobot.targetX = clamp(humanRobot.targetX, 0.0, 1.0);
+            humanRobot.targetY = clamp(humanRobot.targetY, 0.0, 1.0);
+        }
+
+        function resizeCanvas() {
+            cssSize = Math.max(220, Math.floor(container.clientWidth));
+            cssScale = envSize / cssSize;
+            dpr = window.devicePixelRatio || 1;
+
+            envCanvas.style.width = cssSize + "px";
+            envCanvas.style.height = cssSize + "px";
+            envCanvas.width = Math.floor(cssSize * dpr);
+            envCanvas.height = Math.floor(cssSize * dpr);
+
+            envCtx.setTransform(envCanvas.width / envSize, 0, 0, envCanvas.height / envSize, 0, 0);
+            draw();
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+
+        container.addEventListener("mousemove", (event) => {
+            if (!animationReady) return;
+            setTargetFromClientXY(event.clientX, event.clientY);
+        });
+
+        container.addEventListener("touchstart", (event) => {
+            event.preventDefault();
+            if (!animationReady) return;
+            if (event.touches && event.touches[0]) {
+                setTargetFromClientXY(event.touches[0].clientX, event.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        container.addEventListener("touchmove", (event) => {
+            event.preventDefault();
+            if (!animationReady) return;
+            if (event.touches && event.touches[0]) {
+                setTargetFromClientXY(event.touches[0].clientX, event.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        function updateStatusText() {
+            if (isLoading) {
+                statusText.textContent = `Loading ${currentTargetName}...`;
+                return;
+            }
+
+            if (!animationReady) {
+                statusText.textContent = "Loading target samples...";
+                return;
+            }
+
+            const total = targetPoints.length;
+            const remaining = total - erasedCount;
+            if (remaining === 0) {
+                statusText.textContent = `All points erased`;
+            } else {
+                statusText.textContent = `${remaining} / ${total} points remaining`;
+            }
+        }
+
+        function updateOverlayText() {
+            if (isLoading) {
+                statsOverlay.textContent = `Loading target: ${currentTargetName}`;
+                return;
+            }
+
+            if (!animationReady) {
+                statsOverlay.textContent = "Loading target samples...";
+                return;
+            }
+
             const total = targetPoints.length;
             const remaining = total - erasedCount;
             const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
 
-            statusText.textContent = animationReady
-                ? `${remaining} / ${total} target points remaining`
-                : "Loading target samples...";
+            statsOverlay.textContent =
+                `Target: ${currentTargetName}\n` +
+                // `Target points: ${total}\n` +
+                // `Remaining: ${remaining}\n` +
+                `Erased: ${percent}%`;
+                // `Mode: ${erasingActive ? "erasing" : "paused"}\n` +
+                // `Human history time: ${controller.humanTrajectoryTime.toFixed(2)}\n` +
+                // `Shared history time: ${(controller.autoTrajectoryTime + controller.humanTrajectoryTime).toFixed(2)}`;
+        }
 
-            statsOverlay.textContent = animationReady
-                ? `Target points: ${total}\nRemaining: ${remaining}\nErased: ${erasedCount} (${percent}%)\nMode: ${erasingActive ? "erasing" : "paused"}`
-                : "Loading target samples...";
+        function updateUiText() {
+            updateStatusText();
+            updateOverlayText();
         }
 
         function setButtonState() {
-            toggleErasingButton.textContent = erasingActive ? "Stop Erasing" : "Start Erasing";
+            toggleErasingButton.textContent = erasingActive ? "Stop Robot" : "Start Robot";
             if (erasingActive) {
                 toggleErasingButton.style.color = "";
                 toggleErasingButton.style.borderColor = "";
@@ -360,6 +523,14 @@
                 toggleErasingButton.style.color = "red";
                 toggleErasingButton.style.borderColor = "red";
             }
+        }
+
+        function setLoadingState(loading) {
+            isLoading = loading;
+            targetSelect.disabled = loading;
+            toggleErasingButton.disabled = loading || !animationReady;
+            resetButton.disabled = loading || !animationReady;
+            updateUiText();
         }
 
         function drawTargetPoints() {
@@ -372,11 +543,11 @@
             }
         }
 
-        function drawTrail() {
+        function drawTrail(trail, strokeStyle) {
             if (trail.length < 2) return;
             envCtx.beginPath();
             envCtx.lineWidth = 2;
-            envCtx.strokeStyle = "rgba(31, 119, 180, 0.35)";
+            envCtx.strokeStyle = strokeStyle;
             envCtx.moveTo(toCanvasX(trail[0].x), toCanvasY(trail[0].y));
             for (let i = 1; i < trail.length; i++) {
                 envCtx.lineTo(toCanvasX(trail[i].x), toCanvasY(trail[i].y));
@@ -384,33 +555,39 @@
             envCtx.stroke();
         }
 
-        function drawRobot() {
+        function drawRobot(robot, bodyColor, auraColor) {
             const x = toCanvasX(robot.x);
             const y = toCanvasY(robot.y);
 
             envCtx.beginPath();
             envCtx.arc(x, y, eraseRadiusPx, 0, 2 * Math.PI);
-            envCtx.fillStyle = "rgba(31, 119, 180, 0.12)";
+            envCtx.fillStyle = auraColor;
             envCtx.fill();
             envCtx.lineWidth = 1.5;
-            envCtx.strokeStyle = "rgba(31, 119, 180, 0.4)";
+            envCtx.strokeStyle = bodyColor;
             envCtx.stroke();
 
             envCtx.beginPath();
             envCtx.arc(x, y, robotRadiusPx, 0, 2 * Math.PI);
-            envCtx.fillStyle = "#1f77b4";
+            envCtx.fillStyle = bodyColor;
             envCtx.fill();
             envCtx.lineWidth = 2;
             envCtx.strokeStyle = "#000";
             envCtx.stroke();
         }
 
-        function drawCornerMarker() {
+        function drawTargetCrosshair() {
+            const x = toCanvasX(humanRobot.targetX);
+            const y = toCanvasY(humanRobot.targetY);
             envCtx.save();
-            envCtx.strokeStyle = "#999";
+            envCtx.strokeStyle = "rgba(255, 127, 14, 0.5)";
             envCtx.lineWidth = 1.5;
-            envCtx.setLineDash([6, 6]);
-            envCtx.strokeRect(0, envSize - 48, 48, 48);
+            envCtx.beginPath();
+            envCtx.moveTo(x - 8, y);
+            envCtx.lineTo(x + 8, y);
+            envCtx.moveTo(x, y - 8);
+            envCtx.lineTo(x, y + 8);
+            envCtx.stroke();
             envCtx.restore();
         }
 
@@ -419,28 +596,70 @@
             envCtx.fillStyle = "#fff";
             envCtx.fillRect(0, 0, envSize, envSize);
 
-            drawCornerMarker();
             drawTargetPoints();
-            drawTrail();
-            drawRobot();
+            drawTrail(autoTrail, "rgba(31, 119, 180, 0.35)");
+            drawTrail(humanTrail, "rgba(255, 127, 14, 0.35)");
+            drawTargetCrosshair();
+            drawRobot(autoRobot, "#1f77b4", "rgba(31, 119, 180, 0.12)");
+            drawRobot(humanRobot, "#ff7f0e", "rgba(255, 127, 14, 0.12)");
         }
 
-        function stepSimulation(dt) {
+        function resetSimulationFromLoadedSamples() {
+            erasingActive = false;
+            setButtonState();
+
+            autoRobot.x = AUTO_START.x;
+            autoRobot.y = AUTO_START.y;
+            autoRobot.vx = 0.0;
+            autoRobot.vy = 0.0;
+
+            humanRobot.x = HUMAN_START.x;
+            humanRobot.y = HUMAN_START.y;
+            humanRobot.targetX = HUMAN_START.x;
+            humanRobot.targetY = HUMAN_START.y;
+
+            targetPoints = loadedTargetSamples.map((p) => ({ x: p.x, y: p.y, erased: false }));
+            erasedCount = 0;
+
+            resetTrajectoryStatistics();
+            computeTargetCoefficientsFromSamples(targetPoints);
+
+            autoTrail = [{ x: autoRobot.x, y: autoRobot.y }];
+            humanTrail = [{ x: humanRobot.x, y: humanRobot.y }];
+
+            erasePointsUnderBothRobots();
+            animationReady = true;
+            toggleErasingButton.disabled = false;
+            resetButton.disabled = false;
+            updateUiText();
+            draw();
+        }
+
+        function updateHumanRobot(dt) {
             const safeDt = Math.min(dt, 0.04);
-            const velocity = planVelocity(robot.x, robot.y);
-            robot.vx = velocity[0];
-            robot.vy = velocity[1];
+            const alpha = 1 - Math.pow(1 - humanTrackingSpeed, safeDt * 60);
+            humanRobot.x += (humanRobot.targetX - humanRobot.x) * alpha;
+            humanRobot.y += (humanRobot.targetY - humanRobot.y) * alpha;
+            humanRobot.x = clamp(humanRobot.x, 0.0, 1.0);
+            humanRobot.y = clamp(humanRobot.y, 0.0, 1.0);
 
-            robot.x = clamp(robot.x + safeDt * robot.vx, 0.0, 1.0);
-            robot.y = clamp(robot.y + safeDt * robot.vy, 0.0, 1.0);
+            accumulateHumanTrajectoryStats(humanRobot.x, humanRobot.y, safeDt);
+            pushTrail(humanTrail, humanRobot.x, humanRobot.y);
+        }
 
-            accumulateTrajectoryStats(robot.x, robot.y, safeDt);
-            erasePointsUnderRobot();
+        function updateAutoRobot(dt) {
+            if (!erasingActive) return;
 
-            trail.push({ x: robot.x, y: robot.y });
-            if (trail.length > trailMaxLength) {
-                trail.shift();
-            }
+            const safeDt = Math.min(dt, 0.01);
+            const velocity = planAutoVelocity(autoRobot.x, autoRobot.y);
+            autoRobot.vx = velocity[0];
+            autoRobot.vy = velocity[1];
+
+            autoRobot.x = clamp(autoRobot.x + safeDt * autoRobot.vx, 0.0, 1.0);
+            autoRobot.y = clamp(autoRobot.y + safeDt * autoRobot.vy, 0.0, 1.0);
+
+            accumulateAutoTrajectoryStats(autoRobot.x, autoRobot.y, safeDt);
+            pushTrail(autoTrail, autoRobot.x, autoRobot.y);
         }
 
         function animate(timestamp) {
@@ -448,19 +667,28 @@
             const dt = (timestamp - lastTimestamp) / 1000.0;
             lastTimestamp = timestamp;
 
-            if (animationReady && erasingActive) {
-                stepSimulation(dt);
-                updateStatsText();
+            if (animationReady && !isLoading) {
+                updateHumanRobot(dt);
+                updateAutoRobot(dt);
+                erasePointsUnderBothRobots();
+
+                if (targetPoints.length - erasedCount <= 0 && erasingActive) {
+                    erasingActive = false;
+                    setButtonState();
+                }
+
+                updateUiText();
             }
 
             draw();
             requestAnimationFrame(animate);
         }
 
-        async function loadTargetSamples() {
-            const response = await fetch(TARGET_URL, { cache: "no-store" });
+        async function fetchTargetSamples(targetName) {
+            const url = `${TARGET_BASE_URL}${targetName}.txt`;
+            const response = await fetch(url, { cache: "no-store" });
             if (!response.ok) {
-                throw new Error(`Could not fetch target file: ${response.status}`);
+                throw new Error(`Could not fetch ${targetName}: ${response.status}`);
             }
 
             const text = await response.text();
@@ -475,45 +703,65 @@
                 const x = pieces[0];
                 const y = pieces[1];
                 if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-                points.push({ x: clamp(x, 0.0, 1.0), y: clamp(y, 0.0, 1.0), erased: false });
+                points.push({ x: clamp(x, 0.0, 1.0), y: clamp(y, 0.0, 1.0) });
             }
 
             if (!points.length) {
-                throw new Error("The target file did not contain any valid sample points.");
+                throw new Error(`The target file for ${targetName} did not contain any valid sample points.`);
             }
 
-            targetPoints = points;
-            erasedCount = 0;
-            computeTargetCoefficientsFromSamples(targetPoints);
-            resetTrajectoryStatistics();
-            erasePointsUnderRobot();
-
-            trail = [{ x: robot.x, y: robot.y }];
-            animationReady = true;
-            toggleErasingButton.disabled = false;
-            updateStatsText();
-            draw();
+            return points;
         }
 
+        async function loadSelectedTarget(targetName) {
+            if (!TARGET_NAMES.includes(targetName)) return;
+            currentTargetName = targetName;
+            const requestId = ++loadRequestId;
+            animationReady = false;
+            setLoadingState(true);
+            setButtonState();
+
+            try {
+                const points = await fetchTargetSamples(targetName);
+                if (requestId !== loadRequestId) return;
+                loadedTargetSamples = points;
+                resetSimulationFromLoadedSamples();
+            } catch (error) {
+                console.error(error);
+                statusText.textContent = error.message;
+                statsOverlay.textContent = error.message;
+                draw();
+            } finally {
+                if (requestId === loadRequestId) {
+                    setLoadingState(false);
+                    updateUiText();
+                }
+            }
+        }
+
+        targetSelect.addEventListener("change", async (event) => {
+            await loadSelectedTarget(event.target.value);
+        });
+
         toggleErasingButton.addEventListener("click", () => {
-            if (!animationReady) return;
+            if (!animationReady || isLoading) return;
+            if (targetPoints.length - erasedCount <= 0) return;
             erasingActive = !erasingActive;
             setButtonState();
-            updateStatsText();
+            updateUiText();
+        });
+
+        resetButton.addEventListener("click", () => {
+            if (!animationReady || isLoading) return;
+            resetSimulationFromLoadedSamples();
         });
 
         initController();
         resizeCanvas();
         setButtonState();
-        updateStatsText();
+        updateUiText();
         requestAnimationFrame(animate);
-
-        loadTargetSamples().catch((error) => {
-            console.error(error);
-            statusText.textContent = error.message;
-            statsOverlay.textContent = error.message;
-            draw();
-        });
+        loadSelectedTarget(currentTargetName);
     </script>
 </body>
 
