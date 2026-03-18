@@ -689,7 +689,7 @@
         }
 
         function updateHumanRobot(dt) {
-            const safeDt = Math.min(dt, 0.04);
+            const safeDt = Math.min(dt, 0.01);
             const alpha = 1 - Math.pow(1 - humanTrackingSpeed, safeDt * 60);
             humanRobot.x += (humanRobot.targetX - humanRobot.x) * alpha;
             humanRobot.y += (humanRobot.targetY - humanRobot.y) * alpha;
