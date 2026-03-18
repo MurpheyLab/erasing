@@ -139,7 +139,7 @@
 
         const envSize = 680;
         const robotRadiusPx = 10;
-        const eraseRadiusPx = 16;
+        const eraseRadiusPx = 36;
         const pointRadiusPx = 2.5;
         const trailMaxLength = 450;
 
@@ -184,6 +184,14 @@
 
         function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value));
+        }
+
+        function toCanvasX(x) {
+            return x * envSize;
+        }
+
+        function toCanvasY(y) {
+            return (1 - y) * envSize;
         }
 
         function resizeCanvas() {
@@ -359,7 +367,7 @@
             for (const p of targetPoints) {
                 if (p.erased) continue;
                 envCtx.beginPath();
-                envCtx.arc(p.x * envSize, p.y * envSize, pointRadiusPx, 0, 2 * Math.PI);
+                envCtx.arc(toCanvasX(p.x), toCanvasY(p.y), pointRadiusPx, 0, 2 * Math.PI);
                 envCtx.fill();
             }
         }
@@ -369,16 +377,16 @@
             envCtx.beginPath();
             envCtx.lineWidth = 2;
             envCtx.strokeStyle = "rgba(31, 119, 180, 0.35)";
-            envCtx.moveTo(trail[0].x * envSize, trail[0].y * envSize);
+            envCtx.moveTo(toCanvasX(trail[0].x), toCanvasY(trail[0].y));
             for (let i = 1; i < trail.length; i++) {
-                envCtx.lineTo(trail[i].x * envSize, trail[i].y * envSize);
+                envCtx.lineTo(toCanvasX(trail[i].x), toCanvasY(trail[i].y));
             }
             envCtx.stroke();
         }
 
         function drawRobot() {
-            const x = robot.x * envSize;
-            const y = robot.y * envSize;
+            const x = toCanvasX(robot.x);
+            const y = toCanvasY(robot.y);
 
             envCtx.beginPath();
             envCtx.arc(x, y, eraseRadiusPx, 0, 2 * Math.PI);
@@ -402,7 +410,7 @@
             envCtx.strokeStyle = "#999";
             envCtx.lineWidth = 1.5;
             envCtx.setLineDash([6, 6]);
-            envCtx.strokeRect(0, 0, 48, 48);
+            envCtx.strokeRect(0, envSize - 48, 48, 48);
             envCtx.restore();
         }
 
