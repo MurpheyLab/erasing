@@ -192,7 +192,6 @@
             </select>
             <button id="toggleErasingButton" disabled>Start Robot</button>
             <button id="resetButton" disabled>Reset</button>
-            <span class="status" id="statusText">Loading target samples...</span>
         </div>
 
         <div class="stage" id="env-container" aria-label="Ergodic erasing environment">
@@ -584,12 +583,12 @@
 
         function updateStatusText() {
             if (isLoading) {
-                statusText.textContent = `Loading ${currentTargetName}...`;
+                if (statusText) statusText.textContent = `Loading ${currentTargetName}...`;
                 return;
             }
 
             if (!animationReady) {
-                statusText.textContent = "Loading target samples...";
+                if (statusText) statusText.textContent = "Loading target samples...";
                 return;
             }
 
@@ -598,9 +597,9 @@
             const elapsedLabel = formatElapsedTime(elapsedTime);
 
             if (remaining === 0) {
-                statusText.textContent = `All the points have been erased in ${elapsedLabel}`;
+                if (statusText) statusText.textContent = `All the points have been erased in ${elapsedLabel}`;
             } else {
-                statusText.textContent = `${remaining} / ${total} points remaining · Time: ${elapsedLabel}`;
+                if (statusText) statusText.textContent = `${remaining} / ${total} points remaining · Time: ${elapsedLabel}`;
             }
         }
 
@@ -619,19 +618,25 @@
             const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
             const elapsedLabel = formatElapsedTime(elapsedTime);
 
-            if (controller.remainingTargetCount === 0) {
-                statsOverlay.textContent =
-                    `Target: ${currentTargetName}
+//             if (controller.remainingTargetCount === 0) {
+//                 statsOverlay.textContent =
+//                     `Target: ${currentTargetName}
+// ` +
+//                     `Erasing completed in ${elapsedLabel}`;
+//             } else {
+//                 statsOverlay.textContent =
+//                     `Target: ${currentTargetName}
+// ` +
+//                     `Erased: ${percent}%
+// ` +
+//                     `Time: ${elapsedLabel}`;
+//             }
+            statsOverlay.textContent =
+                `Target: ${currentTargetName}
 ` +
-                    `All the points have been erased in ${elapsedLabel}`;
-            } else {
-                statsOverlay.textContent =
-                    `Target: ${currentTargetName}
+                `Erased: ${percent}%
 ` +
-                    `Erased: ${percent}%
-` +
-                    `Time: ${elapsedLabel}`;
-            }
+                `Time: ${elapsedLabel}`;
         }
 
         function updateUiText() {
@@ -902,7 +907,7 @@
                 resetSimulationFromLoadedSamples();
             } catch (error) {
                 console.error(error);
-                statusText.textContent = error.message;
+                if (statusText) statusText.textContent = error.message;
                 statsOverlay.textContent = error.message;
                 draw();
             } finally {
