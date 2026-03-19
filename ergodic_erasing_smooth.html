@@ -245,29 +245,29 @@
         const HUMAN_START = { x: 0.94, y: 0.94 };
 
         const controller = {
-                numK: 16,
-                speedNorm: 0.68,
-                wallGain: 0.98,
-                lambdaPow: 1.95,
-                integrationDt: 1 / 180,
-                gradientTau: 0.10,
-                velocityTau: 0.08,
-                maxAccel: 5.0,
-                fieldGain: 1.6,
-                gradientDeadband: 1e-5,
-                trajectoryDecayTau: 2.2,
-                autoTrajectoryTime: 0.0,
-                humanTrajectoryTime: 0.0,
-                autoCksIntegral: null,
-                humanCksIntegral: null,
-                phiks: null,
-                targetBasisSums: null,
-                remainingTargetCount: 0,
-                ksX: null,
-                ksY: null,
-                hks: null,
-                lamks: null
-            };
+            numK: 16,
+            speedNorm: 0.68,
+            wallGain: 0.98,
+            lambdaPow: 1.95,
+            integrationDt: 1 / 180,
+            gradientTau: 0.10,
+            velocityTau: 0.08,
+            maxAccel: 5.0,
+            fieldGain: 1.6,
+            gradientDeadband: 1e-5,
+            trajectoryDecayTau: 2.2,
+            autoTrajectoryTime: 0.0,
+            humanTrajectoryTime: 0.0,
+            autoCksIntegral: null,
+            humanCksIntegral: null,
+            phiks: null,
+            targetBasisSums: null,
+            remainingTargetCount: 0,
+            ksX: null,
+            ksY: null,
+            hks: null,
+            lamks: null
+        };
 
         const envCanvas = document.getElementById("envCanvas");
         const envCtx = envCanvas.getContext("2d");
@@ -310,6 +310,7 @@
         let loadedTargetSamples = [];
         let targetPoints = [];
         let erasedCount = 0;
+        let elapsedTime = 0.0;
 
         function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value));
@@ -574,6 +575,13 @@
             }
         }, { passive: false });
 
+        function formatElapsedTime(seconds) {
+            const safeSeconds = Math.max(0, seconds);
+            const minutes = Math.floor(safeSeconds / 60);
+            const secs = safeSeconds - 60 * minutes;
+            return `${minutes}:${secs.toFixed(2).padStart(5, "0")}`;
+        }
+
         function updateStatusText() {
             if (isLoading) {
                 statusText.textContent = `Loading ${currentTargetName}...`;
@@ -587,10 +595,12 @@
 
             const total = targetPoints.length;
             const remaining = controller.remainingTargetCount;
+            const elapsedLabel = formatElapsedTime(elapsedTime);
+
             if (remaining === 0) {
-                statusText.textContent = `All the points have been erased`;
+                statusText.textContent = `All the points have been erased in ${elapsedLabel}`;
             } else {
-                statusText.textContent = `${remaining} / ${total} points remaining`;
+                statusText.textContent = `${remaining} / ${total} points remaining · Time: ${elapsedLabel}`;
             }
         }
 
@@ -607,10 +617,21 @@
 
             const total = targetPoints.length;
             const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
+            const elapsedLabel = formatElapsedTime(elapsedTime);
 
-            statsOverlay.textContent =
-                `Target: ${currentTargetName}\n` +
-                `Erased: ${percent}%`;
+            if (controller.remainingTargetCount === 0) {
+                statsOverlay.textContent =
+                    `Target: ${currentTargetName}
+` +
+                    `All the points have been erased in ${elapsedLabel}`;
+            } else {
+                statsOverlay.textContent =
+                    `Target: ${currentTargetName}
+` +
+                    `Erased: ${percent}%
+` +
+                    `Time: ${elapsedLabel}`;
+            }
         }
 
         function updateUiText() {
@@ -726,6 +747,7 @@
 
             targetPoints = loadedTargetSamples.map((p) => ({ x: p.x, y: p.y, erased: false }));
             erasedCount = 0;
+            elapsedTime = 0.0;
 
             resetTrajectoryStatistics();
             initializeTargetDistribution(targetPoints);
@@ -801,6 +823,10 @@
         }
 
         function stepSimulation(dt) {
+            if (erasingActive && controller.remainingTargetCount > 0) {
+                elapsedTime += dt;
+            }
+
             decayTrajectoryStatistics(dt);
             updateHumanRobot(dt);
             updateAutoRobot(dt);
