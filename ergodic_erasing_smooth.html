@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ergodic Erasing</title>
+    <style>
+        :root {
+            --max-demo: 980px;
+            --border: 3px solid #000;
+        }
+
+        body {
+            margin: 0;
+            padding: 16px;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+            background: #fff;
+            color: #111;
+        }
+
+        .demo-shell {
+            width: min(100%, var(--max-demo));
+            margin: 0 auto;
+        }
+
+        h2 {
+            margin: 0 0 6px;
+            font-size: 28px;
+        }
+
+        h3 {
+            margin: 0 0 12px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .control-row label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        select,
+        button {
+            appearance: none;
+            border: 2px solid #000;
+            background: #fff;
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 16px;
+        }
+
+        button {
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        button:disabled,
+        select:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        #toggleErasingButton {
+            color: red;
+            border-color: red;
+        }
+
+        .stage {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border: var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fff;
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .overlay {
+            position: absolute;
+            left: 12px;
+            top: 12px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #000;
+            font-size: 13px;
+            line-height: 1.3;
+            pointer-events: none;
+            white-space: pre-line;
+        }
+
+        .legend {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #000;
+            font-size: 16px;
+            line-height: 1.35;
+            pointer-events: none;
+            min-width: 104px;
+        }
+
+        .legend-title {
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-item+.legend-item {
+            margin-top: 4px;
+        }
+
+        .legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 999px;
+            border: 2px solid #000;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+        }
+
+        .legend-swatch.robot {
+            background: #1f77b4;
+        }
+
+        .legend-swatch.human {
+            background: #ff7f0e;
+        }
+
+        .status {
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        .hint {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #333;
+            line-height: 1.45;
+            text-align: justify;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="demo-shell">
+        <h2>Ergodic Erasing</h2>
+        <h3>Human-robot co-adaptation demonstrated through erasing.</h3>
+
+        <div class="control-row">
+            <label for="targetSelect">Target object<br>(click to select)</label>
+            <select id="targetSelect">
+                <option value="airplane">airplane</option>
+                <option value="eifeltower">eifeltower</option>
+                <option value="fire">fire</option>
+                <option value="heart">heart</option>
+                <option value="lock">lock</option>
+                <option value="scissors">scissors</option>
+                <option value="star">star</option>
+                <option value="sword">sword</option>
+                <option value="thunder">thunder</option>
+                <option value="trophy">trophy</option>
+            </select>
+            <button id="toggleErasingButton" disabled>Start Robot</button>
+            <button id="resetButton" disabled>Reset</button>
+            <span class="status" id="statusText">Loading target samples...</span>
+        </div>
+
+        <div class="stage" id="env-container" aria-label="Ergodic erasing environment">
+            <canvas id="envCanvas"></canvas>
+            <div class="overlay" id="statsOverlay">Loading target samples...</div>
+            <div class="legend" aria-hidden="true">
+                <!-- <div class="legend-title">Legend</div> -->
+                <div class="legend-item">
+                    <span class="legend-swatch robot"></span>
+                    <span>Robot</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-swatch human"></span>
+                    <span>You</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="hint">
+            The black points represent the target to be erased (you can choose different target from the dropdown menu).
+            The blue eraser is
+            controlled by a robot. The orange eraser follows your mouse or finger on the screen. Click the "Reset"
+            button to restart.
+        </div>
+    </div>
+
+    <script>
+        const TARGET_BASE_URL = "https://raw.githubusercontent.com/MurpheyLab/lqr-flow-matching/refs/heads/main/tutorials/test_objects/2d/";
+        const TARGET_NAMES = [
+            "airplane",
+            "eifeltower",
+            "fire",
+            "heart",
+            "lock",
+            "scissors",
+            "star",
+            "sword",
+            "thunder",
+            "trophy"
+        ];
+
+        const envSize = 680;
+        const robotRadiusPx = 10;
+        const eraseRadiusPx = 36;
+        const pointRadiusPx = 2.5;
+        const trailMaxLength = 500;
+        const humanTrackingSpeed = 0.1;
+
+        const AUTO_START = { x: 0.06, y: 0.06 };
+        const HUMAN_START = { x: 0.94, y: 0.94 };
+
+        const controller = {
+                numK: 16,
+                speedNorm: 0.68,
+                wallGain: 0.07,
+                lambdaPow: 1.95,
+                integrationDt: 1 / 180,
+                gradientTau: 0.10,
+                velocityTau: 0.08,
+                maxAccel: 5.0,
+                fieldGain: 1.6,
+                gradientDeadband: 1e-5,
+                trajectoryDecayTau: 2.2,
+                autoTrajectoryTime: 0.0,
+                humanTrajectoryTime: 0.0,
+                autoCksIntegral: null,
+                humanCksIntegral: null,
+                phiks: null,
+                targetBasisSums: null,
+                remainingTargetCount: 0,
+                ksX: null,
+                ksY: null,
+                hks: null,
+                lamks: null
+            };
+
+        const envCanvas = document.getElementById("envCanvas");
+        const envCtx = envCanvas.getContext("2d");
+        const container = document.getElementById("env-container");
+        const targetSelect = document.getElementById("targetSelect");
+        const toggleErasingButton = document.getElementById("toggleErasingButton");
+        const resetButton = document.getElementById("resetButton");
+        const statusText = document.getElementById("statusText");
+        const statsOverlay = document.getElementById("statsOverlay");
+
+        let dpr = window.devicePixelRatio || 1;
+        let cssSize = envSize;
+        let cssScale = 1;
+
+        let animationReady = false;
+        let erasingActive = false;
+        let isLoading = false;
+        let lastTimestamp = null;
+        let currentTargetName = targetSelect.value;
+        let loadRequestId = 0;
+
+        let autoRobot = {
+            x: AUTO_START.x,
+            y: AUTO_START.y,
+            vx: 0.0,
+            vy: 0.0,
+            fieldX: 0.0,
+            fieldY: 0.0
+        };
+
+        let humanRobot = {
+            x: HUMAN_START.x,
+            y: HUMAN_START.y,
+            targetX: HUMAN_START.x,
+            targetY: HUMAN_START.y
+        };
+
+        let autoTrail = [];
+        let humanTrail = [];
+        let loadedTargetSamples = [];
+        let targetPoints = [];
+        let erasedCount = 0;
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function toCanvasX(x) {
+            return x * envSize;
+        }
+
+        function toCanvasY(y) {
+            return (1 - y) * envSize;
+        }
+
+        function analyticHk(kx, ky) {
+            const ix = (kx === 0) ? 1.0 : 0.5;
+            const iy = (ky === 0) ? 1.0 : 0.5;
+            return Math.sqrt(ix * iy);
+        }
+
+        function initController() {
+            const numModes = controller.numK * controller.numK;
+            controller.autoCksIntegral = new Float64Array(numModes);
+            controller.humanCksIntegral = new Float64Array(numModes);
+            controller.phiks = new Float64Array(numModes);
+            controller.targetBasisSums = new Float64Array(numModes);
+            controller.ksX = new Int32Array(numModes);
+            controller.ksY = new Int32Array(numModes);
+            controller.hks = new Float64Array(numModes);
+            controller.lamks = new Float64Array(numModes);
+
+            let idx = 0;
+            for (let ky = 0; ky < controller.numK; ky++) {
+                for (let kx = 0; kx < controller.numK; kx++) {
+                    controller.ksX[idx] = kx;
+                    controller.ksY[idx] = ky;
+                    controller.hks[idx] = analyticHk(kx, ky);
+                    controller.lamks[idx] = Math.pow(1 + Math.hypot(kx, ky), -controller.lambdaPow);
+                    idx += 1;
+                }
+            }
+        }
+
+        function basisValueAtPoint(x, y, modeIndex) {
+            const kx = controller.ksX[modeIndex];
+            const ky = controller.ksY[modeIndex];
+            const hk = controller.hks[modeIndex];
+            return Math.cos(Math.PI * kx * x) * Math.cos(Math.PI * ky * y) / hk;
+        }
+
+        function basisGradientAtPoint(x, y, modeIndex) {
+            const kx = controller.ksX[modeIndex];
+            const ky = controller.ksY[modeIndex];
+            const hk = controller.hks[modeIndex];
+            const common = 1.0 / hk;
+
+            const dfdx = -Math.PI * kx * Math.sin(Math.PI * kx * x) * Math.cos(Math.PI * ky * y) * common;
+            const dfdy = -Math.PI * ky * Math.cos(Math.PI * kx * x) * Math.sin(Math.PI * ky * y) * common;
+            return [dfdx, dfdy];
+        }
+
+        function updateTargetCoefficientsFromCurrentTarget() {
+            controller.phiks.fill(0.0);
+            if (controller.remainingTargetCount <= 0) return;
+
+            const invN = 1.0 / controller.remainingTargetCount;
+            for (let m = 0; m < controller.phiks.length; m++) {
+                controller.phiks[m] = controller.targetBasisSums[m] * invN;
+            }
+        }
+
+        function initializeTargetDistribution(points) {
+            controller.targetBasisSums.fill(0.0);
+            controller.remainingTargetCount = 0;
+
+            for (const p of points) {
+                for (let m = 0; m < controller.targetBasisSums.length; m++) {
+                    controller.targetBasisSums[m] += basisValueAtPoint(p.x, p.y, m);
+                }
+                controller.remainingTargetCount += 1;
+            }
+
+            updateTargetCoefficientsFromCurrentTarget();
+        }
+
+        function removePointFromTargetDistribution(point) {
+            if (controller.remainingTargetCount <= 0) return;
+
+            for (let m = 0; m < controller.targetBasisSums.length; m++) {
+                controller.targetBasisSums[m] -= basisValueAtPoint(point.x, point.y, m);
+            }
+
+            controller.remainingTargetCount -= 1;
+            if (controller.remainingTargetCount < 0) {
+                controller.remainingTargetCount = 0;
+            }
+        }
+
+        function resetTrajectoryStatistics() {
+            controller.autoTrajectoryTime = 0.0;
+            controller.humanTrajectoryTime = 0.0;
+            controller.autoCksIntegral.fill(0.0);
+            controller.humanCksIntegral.fill(0.0);
+        }
+
+        function decayTrajectoryStatistics(dt) {
+            if (controller.trajectoryDecayTau <= 0.0) return;
+            const decay = Math.exp(-dt / controller.trajectoryDecayTau);
+
+            controller.autoTrajectoryTime *= decay;
+            controller.humanTrajectoryTime *= decay;
+            for (let m = 0; m < controller.autoCksIntegral.length; m++) {
+                controller.autoCksIntegral[m] *= decay;
+                controller.humanCksIntegral[m] *= decay;
+            }
+        }
+
+        function accumulateStats(integralArray, x, y, dt) {
+            for (let m = 0; m < integralArray.length; m++) {
+                integralArray[m] += dt * basisValueAtPoint(x, y, m);
+            }
+        }
+
+        function accumulateAutoTrajectoryStats(x, y, dt) {
+            accumulateStats(controller.autoCksIntegral, x, y, dt);
+            controller.autoTrajectoryTime += dt;
+        }
+
+        function accumulateHumanTrajectoryStats(x, y, dt) {
+            accumulateStats(controller.humanCksIntegral, x, y, dt);
+            controller.humanTrajectoryTime += dt;
+        }
+
+        function currentCombinedCk(modeIndex) {
+            let numerator = controller.autoCksIntegral[modeIndex];
+            let denominator = controller.autoTrajectoryTime;
+
+            if (controller.humanTrajectoryTime > 0.0) {
+                numerator += controller.humanCksIntegral[modeIndex];
+                denominator += controller.humanTrajectoryTime;
+            }
+
+            if (denominator <= 1e-8) return 0.0;
+            return numerator / denominator;
+        }
+
+        function wallRepulsion(x, y) {
+            const eps = 0.055;
+            let rx = 0.0;
+            let ry = 0.0;
+
+            if (x < eps) rx += (eps - x) / eps;
+            if (x > 1 - eps) rx -= (x - (1 - eps)) / eps;
+            if (y < eps) ry += (eps - y) / eps;
+            if (y > 1 - eps) ry -= (y - (1 - eps)) / eps;
+
+            return [controller.wallGain * rx, controller.wallGain * ry];
+        }
+
+        function planAutoField(x, y) {
+            const remaining = controller.remainingTargetCount;
+            if (remaining <= 0) return [0.0, 0.0];
+
+            let gx = 0.0;
+            let gy = 0.0;
+
+            for (let m = 0; m < controller.phiks.length; m++) {
+                const mismatch = controller.lamks[m] * (currentCombinedCk(m) - controller.phiks[m]);
+                const grad = basisGradientAtPoint(x, y, m);
+                gx += mismatch * grad[0];
+                gy += mismatch * grad[1];
+            }
+
+            gx = -gx;
+            gy = -gy;
+
+            const wall = wallRepulsion(x, y);
+            gx += wall[0];
+            gy += wall[1];
+
+            return [gx, gy];
+        }
+
+        function erasePointsAt(x, y) {
+            const rr = Math.pow(eraseRadiusPx / envSize, 2);
+            let changed = false;
+
+            for (const p of targetPoints) {
+                if (p.erased) continue;
+                const dx = p.x - x;
+                const dy = p.y - y;
+                if (dx * dx + dy * dy <= rr) {
+                    p.erased = true;
+                    erasedCount += 1;
+                    removePointFromTargetDistribution(p);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                updateTargetCoefficientsFromCurrentTarget();
+            }
+        }
+
+        function erasePointsUnderBothRobots() {
+            erasePointsAt(autoRobot.x, autoRobot.y);
+            erasePointsAt(humanRobot.x, humanRobot.y);
+        }
+
+        function pushTrail(trail, x, y) {
+            trail.push({ x, y });
+            if (trail.length > trailMaxLength) trail.shift();
+        }
+
+        function setTargetFromClientXY(clientX, clientY) {
+            const bounds = container.getBoundingClientRect();
+            const xCss = clientX - bounds.left;
+            const yCss = clientY - bounds.top;
+
+            const xClamped = clamp(xCss, 0, cssSize);
+            const yClamped = clamp(yCss, 0, cssSize);
+
+            humanRobot.targetX = xClamped * cssScale / envSize;
+            humanRobot.targetY = 1.0 - (yClamped * cssScale / envSize);
+            humanRobot.targetX = clamp(humanRobot.targetX, 0.0, 1.0);
+            humanRobot.targetY = clamp(humanRobot.targetY, 0.0, 1.0);
+        }
+
+        function resizeCanvas() {
+            cssSize = Math.max(220, Math.floor(container.clientWidth));
+            cssScale = envSize / cssSize;
+            dpr = window.devicePixelRatio || 1;
+
+            envCanvas.style.width = cssSize + "px";
+            envCanvas.style.height = cssSize + "px";
+            envCanvas.width = Math.floor(cssSize * dpr);
+            envCanvas.height = Math.floor(cssSize * dpr);
+
+            envCtx.setTransform(envCanvas.width / envSize, 0, 0, envCanvas.height / envSize, 0, 0);
+            draw();
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+
+        container.addEventListener("mousemove", (event) => {
+            if (!animationReady) return;
+            setTargetFromClientXY(event.clientX, event.clientY);
+        });
+
+        container.addEventListener("touchstart", (event) => {
+            event.preventDefault();
+            if (!animationReady) return;
+            if (event.touches && event.touches[0]) {
+                setTargetFromClientXY(event.touches[0].clientX, event.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        container.addEventListener("touchmove", (event) => {
+            event.preventDefault();
+            if (!animationReady) return;
+            if (event.touches && event.touches[0]) {
+                setTargetFromClientXY(event.touches[0].clientX, event.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        function updateStatusText() {
+            if (isLoading) {
+                statusText.textContent = `Loading ${currentTargetName}...`;
+                return;
+            }
+
+            if (!animationReady) {
+                statusText.textContent = "Loading target samples...";
+                return;
+            }
+
+            const total = targetPoints.length;
+            const remaining = controller.remainingTargetCount;
+            if (remaining === 0) {
+                statusText.textContent = `All points erased`;
+            } else {
+                statusText.textContent = `${remaining} / ${total} points remaining`;
+            }
+        }
+
+        function updateOverlayText() {
+            if (isLoading) {
+                statsOverlay.textContent = `Loading target: ${currentTargetName}`;
+                return;
+            }
+
+            if (!animationReady) {
+                statsOverlay.textContent = "Loading target samples...";
+                return;
+            }
+
+            const total = targetPoints.length;
+            const percent = total > 0 ? (100 * erasedCount / total).toFixed(1) : "0.0";
+
+            statsOverlay.textContent =
+                `Target: ${currentTargetName}\n` +
+                `Erased: ${percent}%`;
+        }
+
+        function updateUiText() {
+            updateStatusText();
+            updateOverlayText();
+        }
+
+        function setButtonState() {
+            toggleErasingButton.textContent = erasingActive ? "Stop Robot" : "Start Robot";
+            if (erasingActive) {
+                toggleErasingButton.style.color = "";
+                toggleErasingButton.style.borderColor = "";
+            } else {
+                toggleErasingButton.style.color = "red";
+                toggleErasingButton.style.borderColor = "red";
+            }
+        }
+
+        function setLoadingState(loading) {
+            isLoading = loading;
+            targetSelect.disabled = loading;
+            toggleErasingButton.disabled = loading || !animationReady;
+            resetButton.disabled = loading || !animationReady;
+            updateUiText();
+        }
+
+        function drawTargetPoints() {
+            envCtx.fillStyle = "#111";
+            for (const p of targetPoints) {
+                if (p.erased) continue;
+                envCtx.beginPath();
+                envCtx.arc(toCanvasX(p.x), toCanvasY(p.y), pointRadiusPx, 0, 2 * Math.PI);
+                envCtx.fill();
+            }
+        }
+
+        function drawTrail(trail, strokeStyle) {
+            if (trail.length < 2) return;
+            envCtx.beginPath();
+            envCtx.lineWidth = 2;
+            envCtx.strokeStyle = strokeStyle;
+            envCtx.moveTo(toCanvasX(trail[0].x), toCanvasY(trail[0].y));
+            for (let i = 1; i < trail.length; i++) {
+                envCtx.lineTo(toCanvasX(trail[i].x), toCanvasY(trail[i].y));
+            }
+            envCtx.stroke();
+        }
+
+        function drawRobot(robot, bodyColor, auraColor) {
+            const x = toCanvasX(robot.x);
+            const y = toCanvasY(robot.y);
+
+            envCtx.beginPath();
+            envCtx.arc(x, y, eraseRadiusPx, 0, 2 * Math.PI);
+            envCtx.fillStyle = auraColor;
+            envCtx.fill();
+            envCtx.lineWidth = 1.5;
+            envCtx.strokeStyle = bodyColor;
+            envCtx.stroke();
+
+            envCtx.beginPath();
+            envCtx.arc(x, y, robotRadiusPx, 0, 2 * Math.PI);
+            envCtx.fillStyle = bodyColor;
+            envCtx.fill();
+            envCtx.lineWidth = 2;
+            envCtx.strokeStyle = "#000";
+            envCtx.stroke();
+        }
+
+        function drawTargetCrosshair() {
+            const x = toCanvasX(humanRobot.targetX);
+            const y = toCanvasY(humanRobot.targetY);
+            envCtx.save();
+            envCtx.strokeStyle = "rgba(255, 127, 14, 0.5)";
+            envCtx.lineWidth = 1.5;
+            envCtx.beginPath();
+            envCtx.moveTo(x - 8, y);
+            envCtx.lineTo(x + 8, y);
+            envCtx.moveTo(x, y - 8);
+            envCtx.lineTo(x, y + 8);
+            envCtx.stroke();
+            envCtx.restore();
+        }
+
+        function draw() {
+            envCtx.clearRect(0, 0, envSize, envSize);
+            envCtx.fillStyle = "#fff";
+            envCtx.fillRect(0, 0, envSize, envSize);
+
+            drawTargetPoints();
+            drawTrail(autoTrail, "rgba(31, 119, 180, 0.35)");
+            drawTrail(humanTrail, "rgba(255, 127, 14, 0.35)");
+            drawTargetCrosshair();
+            drawRobot(autoRobot, "#1f77b4", "rgba(31, 119, 180, 0.12)");
+            drawRobot(humanRobot, "#ff7f0e", "rgba(255, 127, 14, 0.12)");
+        }
+
+        function resetSimulationFromLoadedSamples() {
+            erasingActive = false;
+            setButtonState();
+
+            autoRobot.x = AUTO_START.x;
+            autoRobot.y = AUTO_START.y;
+            autoRobot.vx = 0.0;
+            autoRobot.vy = 0.0;
+            autoRobot.fieldX = 0.0;
+            autoRobot.fieldY = 0.0;
+
+            humanRobot.x = HUMAN_START.x;
+            humanRobot.y = HUMAN_START.y;
+            humanRobot.targetX = HUMAN_START.x;
+            humanRobot.targetY = HUMAN_START.y;
+
+            targetPoints = loadedTargetSamples.map((p) => ({ x: p.x, y: p.y, erased: false }));
+            erasedCount = 0;
+
+            resetTrajectoryStatistics();
+            initializeTargetDistribution(targetPoints);
+
+            autoTrail = [{ x: autoRobot.x, y: autoRobot.y }];
+            humanTrail = [{ x: humanRobot.x, y: humanRobot.y }];
+
+            erasePointsUnderBothRobots();
+            animationReady = true;
+            toggleErasingButton.disabled = false;
+            resetButton.disabled = false;
+            updateUiText();
+            draw();
+        }
+
+        function updateHumanRobot(dt) {
+            const alpha = 1 - Math.pow(1 - humanTrackingSpeed, dt * 60);
+            humanRobot.x += (humanRobot.targetX - humanRobot.x) * alpha;
+            humanRobot.y += (humanRobot.targetY - humanRobot.y) * alpha;
+            humanRobot.x = clamp(humanRobot.x, 0.0, 1.0);
+            humanRobot.y = clamp(humanRobot.y, 0.0, 1.0);
+
+            accumulateHumanTrajectoryStats(humanRobot.x, humanRobot.y, dt);
+            pushTrail(humanTrail, humanRobot.x, humanRobot.y);
+        }
+
+        function updateAutoRobot(dt) {
+            if (!erasingActive) return;
+
+            const rawField = planAutoField(autoRobot.x, autoRobot.y);
+            const fieldAlpha = 1 - Math.exp(-dt / controller.gradientTau);
+            autoRobot.fieldX += (rawField[0] - autoRobot.fieldX) * fieldAlpha;
+            autoRobot.fieldY += (rawField[1] - autoRobot.fieldY) * fieldAlpha;
+
+            const fieldNorm = Math.hypot(autoRobot.fieldX, autoRobot.fieldY);
+            let desiredVx = 0.0;
+            let desiredVy = 0.0;
+
+            if (fieldNorm > controller.gradientDeadband) {
+                const desiredSpeed = controller.speedNorm * (1.0 - Math.exp(-controller.fieldGain * fieldNorm));
+                desiredVx = desiredSpeed * autoRobot.fieldX / fieldNorm;
+                desiredVy = desiredSpeed * autoRobot.fieldY / fieldNorm;
+            }
+
+            const velocityAlpha = 1 - Math.exp(-dt / controller.velocityTau);
+            let targetVx = autoRobot.vx + (desiredVx - autoRobot.vx) * velocityAlpha;
+            let targetVy = autoRobot.vy + (desiredVy - autoRobot.vy) * velocityAlpha;
+
+            let dvx = targetVx - autoRobot.vx;
+            let dvy = targetVy - autoRobot.vy;
+            const dvNorm = Math.hypot(dvx, dvy);
+            const maxDv = controller.maxAccel * dt;
+            if (dvNorm > maxDv && dvNorm > 1e-12) {
+                const scale = maxDv / dvNorm;
+                dvx *= scale;
+                dvy *= scale;
+            }
+
+            autoRobot.vx += dvx;
+            autoRobot.vy += dvy;
+
+            let nextX = autoRobot.x + dt * autoRobot.vx;
+            let nextY = autoRobot.y + dt * autoRobot.vy;
+
+            if (nextX <= 0.0 || nextX >= 1.0) autoRobot.vx = 0.0;
+            if (nextY <= 0.0 || nextY >= 1.0) autoRobot.vy = 0.0;
+
+            autoRobot.x = clamp(nextX, 0.0, 1.0);
+            autoRobot.y = clamp(nextY, 0.0, 1.0);
+
+            accumulateAutoTrajectoryStats(autoRobot.x, autoRobot.y, dt);
+            pushTrail(autoTrail, autoRobot.x, autoRobot.y);
+        }
+
+        function stepSimulation(dt) {
+            decayTrajectoryStatistics(dt);
+            updateHumanRobot(dt);
+            updateAutoRobot(dt);
+            erasePointsUnderBothRobots();
+        }
+
+        function animate(timestamp) {
+            if (lastTimestamp === null) lastTimestamp = timestamp;
+            const dt = (timestamp - lastTimestamp) / 1000.0;
+            lastTimestamp = timestamp;
+
+            if (animationReady && !isLoading) {
+                let remainingDt = Math.min(dt, 0.05);
+                while (remainingDt > 1e-8) {
+                    const stepDt = Math.min(remainingDt, controller.integrationDt);
+                    stepSimulation(stepDt);
+                    remainingDt -= stepDt;
+                }
+
+                if (controller.remainingTargetCount <= 0 && erasingActive) {
+                    erasingActive = false;
+                    setButtonState();
+                }
+
+                updateUiText();
+            }
+
+            draw();
+            requestAnimationFrame(animate);
+        }
+
+        async function fetchTargetSamples(targetName) {
+            const url = `${TARGET_BASE_URL}${targetName}.txt`;
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error(`Could not fetch ${targetName}: ${response.status}`);
+            }
+
+            const text = await response.text();
+            const lines = text.split(/\r?\n/);
+            const points = [];
+
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line) continue;
+                const pieces = line.split(/\s+/).map(Number);
+                if (pieces.length < 2) continue;
+                const x = pieces[0];
+                const y = pieces[1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                points.push({ x: clamp(x, 0.0, 1.0), y: clamp(y, 0.0, 1.0) });
+            }
+
+            if (!points.length) {
+                throw new Error(`The target file for ${targetName} did not contain any valid sample points.`);
+            }
+
+            return points;
+        }
+
+        async function loadSelectedTarget(targetName) {
+            if (!TARGET_NAMES.includes(targetName)) return;
+            currentTargetName = targetName;
+            const requestId = ++loadRequestId;
+            animationReady = false;
+            setLoadingState(true);
+            setButtonState();
+
+            try {
+                const points = await fetchTargetSamples(targetName);
+                if (requestId !== loadRequestId) return;
+                loadedTargetSamples = points;
+                resetSimulationFromLoadedSamples();
+            } catch (error) {
+                console.error(error);
+                statusText.textContent = error.message;
+                statsOverlay.textContent = error.message;
+                draw();
+            } finally {
+                if (requestId === loadRequestId) {
+                    setLoadingState(false);
+                    updateUiText();
+                }
+            }
+        }
+
+        targetSelect.addEventListener("change", async (event) => {
+            await loadSelectedTarget(event.target.value);
+        });
+
+        toggleErasingButton.addEventListener("click", () => {
+            if (!animationReady || isLoading) return;
+            if (controller.remainingTargetCount <= 0) return;
+            erasingActive = !erasingActive;
+            setButtonState();
+            updateUiText();
+        });
+
+        resetButton.addEventListener("click", () => {
+            if (!animationReady || isLoading) return;
+            resetSimulationFromLoadedSamples();
+        });
+
+        initController();
+        resizeCanvas();
+        setButtonState();
+        updateUiText();
+        requestAnimationFrame(animate);
+        loadSelectedTarget(currentTargetName);
+    </script>
+</body>
+
+</html>
